@@ -47,6 +47,9 @@ class CardPredictor:
         self.consecutive_fails = self._load_data('consecutive_fails.json', is_scalar=True) or 0
         self.pending_edits: Dict[int, Dict] = self._load_data('pending_edits.json')
         
+        # NOUVEAU: Suivi de la date de la dernière réinitialisation du stock de prédictions (pour 00h59 WAT)
+        self.last_daily_reset_date = self._load_data('last_daily_reset_date.json', is_scalar=True) or "" 
+        
         # --- B. Configuration Canaux (AVEC FALLBACK SÉCURISÉ) ---
         raw_config = self._load_data('channels_config.json')
         self.config_data = raw_config if isinstance(raw_config, dict) else {}
@@ -124,6 +127,9 @@ class CardPredictor:
         self._save_data(self.last_analysis_time, 'last_analysis_time.json')
         self._save_data(self.pending_edits, 'pending_edits.json')
         self._save_data(self.collected_games, 'collected_games.json')
+        
+        # NOUVEAU: Sauvegarde de la date de réinitialisation
+        self._save_data(self.last_daily_reset_date, 'last_daily_reset_date.json') 
 
     def set_channel_id(self, channel_id: int, channel_type: str):
         if not isinstance(self.config_data, dict): self.config_data = {}
@@ -342,58 +348,51 @@ class CardPredictor:
             logger.info("🧠 Mise à jour INTER périodique (30 min).")
             # Force l'activation si on a des données
             if len(self.inter_data) >= 3:
-                self.analyze_and_set_smart_rules(chat_id=self.active_admin_chat_id, force_activate=True)
+                self.analyze_and_set_smart_rules(force_activate=True)
             else:
                 self.analyze_and_set_smart_rules(chat_id=self.active_admin_chat_id)
 
-    def get_inter_status(self) -> Tuple[str, Dict]:
-        """Retourne le statut du mode INTER avec message et clavier."""
-        data_count = len(self.inter_data)
-        
-        if not self.smart_rules:
-            message = f"🧠 **MODE INTER - {'✅ ACTIF' if self.is_inter_mode_active else '❌ INACTIF'}**\n\n"
-            message += f"📊 **{data_count} jeux collectés**\n"
-            message += "⚠️ Pas encore assez de règles créées.\n\n"
-            message += "**Cliquez sur 'Analyser' pour générer les règles !**"
-            
-            keyboard_buttons = [
-                [{'text': '🔄 Analyser et Activer', 'callback_data': 'inter_apply'}]
-            ]
-            
-            if self.is_inter_mode_active:
-                keyboard_buttons.append([{'text': '❌ Désactiver', 'callback_data': 'inter_default'}])
-            
-            keyboard = {'inline_keyboard': keyboard_buttons}
-        else:
-            rules_by_result = defaultdict(list)
-            for rule in self.smart_rules:
-                rules_by_result[rule['result_suit']].append(rule)
-            
-            message = f"🧠 **MODE INTER - {'✅ ACTIF' if self.is_inter_mode_active else '❌ INACTIF'}**\n\n"
-            message += f"📊 **{len(self.smart_rules)} règles** créées ({data_count} jeux analysés):\n\n"
-            
-            for suit in ['♠️', '❤️', '♦️', '♣️']:
-                if suit in rules_by_result:
-                    message += f"**Pour prédire {suit}:**\n"
-                    for rule in rules_by_result[suit]:
-                        message += f"  • {rule['trigger']} ({rule['count']}x)\n"
-                    message += "\n"
-            
-            if self.is_inter_mode_active:
-                keyboard = {
-                    'inline_keyboard': [
-                        [{'text': '🔄 Relancer Analyse', 'callback_data': 'inter_apply'}],
-                        [{'text': '❌ Désactiver', 'callback_data': 'inter_default'}]
-                    ]
-                }
-            else:
-                keyboard = {
-                    'inline_keyboard': [
-                        [{'text': '🚀 Activer INTER', 'callback_data': 'inter_apply'}]
-                    ]
-                }
-        
-        return message, keyboard
+    # --- NOUVELLE MÉTHODE DE RÉINITIALISATION QUOTIDIENNE (AJOUTÉE) ---
+    def _daily_reset_stocks_at_00h59(self):
+        """
+        Réinitialise UNIQUEMENT les stocks de prédictions après 00h59 (à 01hxx WAT) 
+        pour coïncider avec la réinitialisation du numéro de jeu du canal source.
+        Les données de collecte (INTER) sont conservées.
+        """
+        try:
+            # Nous utilisons datetime.now().hour pour vérifier l'heure locale (assumant WAT)
+            now = datetime.now()
+            current_date_str = now.strftime("%Y-%m-%d")
+
+            # 1. Vérification si la réinitialisation a déjà été faite aujourd'hui
+            if self.last_daily_reset_date == current_date_str:
+                return
+
+            # 2. Déclenchement : L'heure 01hxx signifie que 00h59 est passé.
+            # L'heure 1 représente l'intervalle 01:00:00 à 01:59:59.
+            if now.hour == 1:
+                logger.info("⏰ Réinitialisation QUOTIDIENNE du stock de prédictions (après 00h59 WAT).")
+                
+                # --- RÉINITIALISATION DES STOCKS DE PRÉDICTIONS EN COURS ---
+                self.predictions = {}
+                self.processed_messages = set() 
+                self.pending_edits = {}
+                self.last_prediction_time = 0
+                
+                # Ceci est CRUCIAL : permet au bot de prédire le nouveau jeu #N1 du cycle.
+                self.last_predicted_game_number = 0 
+                self.consecutive_fails = 0
+                
+                # --- CONSERVATION ASSURÉE ---
+                # self.inter_data, self.sequential_history, self.smart_rules, et self.collected_games 
+                # NE SONT PAS touchés. La logique intelligente (2 top) est conservée.
+
+                # 3. Mise à jour du marqueur de date
+                self.last_daily_reset_date = current_date_str
+                self._save_all_data()
+
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de la réinitialisation quotidienne (00h59): {e}")
 
 
     # --- CŒUR DU SYSTÈME : PRÉDICTION ---
@@ -412,6 +411,10 @@ class CardPredictor:
         return False
 
     def should_predict(self, message: str) -> Tuple[bool, Optional[int], Optional[str]]:
+        
+        # Le reset du stock de prédictions se produit une fois que 00h59 est passé (à 01hxx)
+        self._daily_reset_stocks_at_00h59() 
+        
         self.check_and_update_rules()
         
         game_number = self.extract_game_number(message)
