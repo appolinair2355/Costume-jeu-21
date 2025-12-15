@@ -773,8 +773,7 @@ class CardPredictor:
                         self._save_data(self.smart_rules, 'smart_rules.json')
                         break
 
-# Global instance
-card_predictor = CardPredictor()
+# Global instanc
 
 # --- NOUVEAU: Fonctions utilitaires pour la commande /mise ---
 def handle_mise_command(message_text: str, predictor: CardPredictor) -> str:
