@@ -468,4 +468,4 @@ class TelegramHandlers:
         except Exception as e:
             logger.error(f"Update error: {e}")
 
-N'hésitez pas si vous avez d'autres questions sur le déploiement ou la configuration de votre bot !
+
