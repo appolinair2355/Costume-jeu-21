@@ -610,7 +610,7 @@ class CardPredictor:
     def prepare_prediction_text(self, game_number_source: int, predicted_costume: str) -> str:
         """NOUVEAU: Format de prédiction selon la spécification"""
         target_game = game_number_source + 2
-        return f"🔵{target_game}🔵:{predicted_costume} statut :⏳"
+        return f"🔵{target_game}🔵:Enseigne {predicted_costume} statut :⏳"
 
 
     def make_prediction(self, game_number_source: int, suit: str, message_id_bot: int):
@@ -773,7 +773,8 @@ class CardPredictor:
                         self._save_data(self.smart_rules, 'smart_rules.json')
                         break
 
-# Global instanc
+# Global instanc 
+# 🛑 L'instanciation a été supprimée ici pour corriger la dépendance circulaire.
 
 # --- NOUVEAU: Fonctions utilitaires pour la commande /mise ---
 def handle_mise_command(message_text: str, predictor: CardPredictor) -> str:
@@ -805,6 +806,10 @@ def handle_mise_command(message_text: str, predictor: CardPredictor) -> str:
 
 # --- EXEMPLE D'UTILISATION ---
 if __name__ == "__main__":
+    
+    # L'instanciation est conservée ici pour permettre un test autonome du fichier
+    card_predictor = CardPredictor() 
+    
     # Exemple de test de la commande /mise
     exemple_mise = """Pour prédire ♠️:
   • 8♠️ (70x)
