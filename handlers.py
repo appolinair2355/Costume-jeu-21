@@ -1,5 +1,3 @@
-# handlers_final.py
-
 import logging
 import time
 import json
@@ -12,14 +10,17 @@ logger.setLevel(logging.INFO)
 
 # Importation Robuste
 try:
-    from card_predictor_final import CardPredictor, handle_mise_command
+    # On importe CardPredictor ET handle_mise_command depuis le fichier final
+    from card_predictor_final import CardPredictor, handle_mise_command 
 except ImportError:
-    logger.error("❌ IMPOSSIBLE D'IMPORTER CARDPREDICTOR_FINAL")
+    logger.error("❌ IMPOSSIBLE D'IMPORTER CARDPREDICTOR_FINAL. Assurez-vous que le fichier est nommé 'card_predictor_final.py' et qu'il contient handle_mise_command.")
     CardPredictor = None
+    # Définition d'un placeholder pour éviter le plantage si l'import échoue
+    def handle_mise_command(text, predictor): return "❌ Erreur: CardPredictor non chargé."
 
 user_message_counts = defaultdict(list)
 
-# --- MESSAGES UTILISATEUR NETTOYÉS ---
+# --- MESSAGES UTILISATEUR NETTOYÉS (MIS À JOUR) ---
 WELCOME_MESSAGE = """
 👋 **BIENVENUE SUR LE BOT ENSEIGNE !** ♠️♥️♦️♣️
 
@@ -92,6 +93,20 @@ MISE_HELP_MESSAGE = """
 
 Envoyez vos règles manuelles dans le format suivant:
 
+
+Pour prédire ♠️:
+• 8♠️ (70x)
+• 9♣️ (65x)
+Pour prédire ❤️:
+• 10❤️ (80x)
+• A♦️ (45x)
+Pour prédire ♦️:
+• 6♦️ (90x)
+• 7♣️ (55x)
+Pour prédire ♣️:
+• K♠️ (75x)
+• Q♥️ (60x)
+
 ⚠️ **Important:** Envoyez exactement 8 règles (2 par costume).
 """
 
@@ -133,7 +148,7 @@ class TelegramHandlers:
             logger.error(f"Exception envoi message: {e}")
         return None
 
-    # --- NOUVELLE FONCTION MANQUANTE ---
+    # --- GESTION COMMANDE /mise ---
     def _handle_command_mise(self, chat_id: int, text: str):
         """Gère la commande /mise pour les règles manuelles"""
         if not self.card_predictor:
@@ -147,13 +162,12 @@ class TelegramHandlers:
         
         # Traiter les règles manuelles
         try:
-            # handle_mise_command est importé de card_predictor_final
             response = handle_mise_command(text, self.card_predictor)
             self.send_message(chat_id, response)
         except Exception as e:
             logger.error(f"Erreur lors du traitement de /mise: {e}")
             self.send_message(chat_id, "❌ Erreur lors du traitement des règles manuelles.")
-            
+
     # --- GESTION COMMANDE /deploy ---
     def _handle_command_deploy(self, chat_id: int):
         try:
@@ -173,7 +187,7 @@ class TelegramHandlers:
                 # Fichiers d'état
                 'last_analysis_time.json', 'last_predicted_game_number.json',
                 'last_prediction_time.json', 'consecutive_fails.json',
-                'last_reset_date.json' # AJOUT DEPUIS LA VERSION CORRIGÉE
+                'last_reset_date.json'
             ]
             
             # Créer le fichier zip directement sans tempdir
@@ -184,17 +198,17 @@ class TelegramHandlers:
             
             with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 for filename in files_to_include:
-                    # NOTE: on s'assure que le fichier CardPredictor est bien renommé
                     zip_name = filename
                     if filename == 'card_predictor_final.py':
-                        zip_name = 'card_predictor.py'
+                        # Renommer dans le zip pour compatibilité avec l'ancien nom de fichier
+                        zip_name = 'card_predictor.py' 
                         
                     if os.path.exists(filename):
                         # Lire et modifier config.py pour le port 10000
                         if filename == 'config.py':
                             with open(filename, 'r') as f:
                                 content = f.read()
-                            # Remplacer le port 5000 par 10000
+                            # Remplacer le port 5000 par 10000 (standard Replit/Render)
                             content = content.replace('int(os.getenv(\'PORT\') or 5000)', 'int(os.getenv(\'PORT\') or 10000)')
                             zipf.writestr(zip_name, content)
                         else:
@@ -214,7 +228,6 @@ class TelegramHandlers:
                 
                 data = {
                     'chat_id': chat_id,
-                    # NOUVEAU CAPTION
                     'caption': f'📦 **fin23.zip - Package Replit Deployment**\n\n✅ Port : 5000 (Replit)\n✅ Tous les fichiers inclus\n✅ **{data_count} jeux collectés**\n✅ **{rules_count} règles INTER**\n✅ Règles manuelles supportées\n✅ Instructions incluses\n\n**Déploiement :**\n1. Utilisez Replit Deployments\n2. Variables env : BOT_TOKEN\n3. WEBHOOK_URL auto-configuré\n\nVoir RENDER_DEPLOYMENT_INSTRUCTIONS.md pour les détails',
                     'parse_mode': 'Markdown'
                 }
@@ -231,7 +244,6 @@ class TelegramHandlers:
         except Exception as e:
             logger.error(f"Erreur /deploy : {e}")
             self.send_message(chat_id, f"❌ Erreur : {str(e)}")
-
 
     # --- GESTION COMMANDE /collect ---
     def _handle_command_collect(self, chat_id: int):
@@ -298,7 +310,6 @@ class TelegramHandlers:
         
         self.send_message(chat_id, message, reply_markup=keyboard)
 
-
     # --- GESTION COMMANDE /inter ---
     def _handle_command_inter(self, chat_id: int, text: str):
         if not self.card_predictor: 
@@ -356,7 +367,7 @@ class TelegramHandlers:
                 self.card_predictor.set_channel_id(chat_id, type_c)
                 self.send_message(chat_id, f"✅ Ce canal est maintenant défini comme **{type_c.upper()}**.\n(L'ID forcé dans le code sera utilisé si le bot redémarre sans ce fichier de config)", message_id=msg_id, edit=True)
 
-    # --- UPDATES (PARTIE CORRIGÉE avec /mise) ---
+    # --- UPDATES (Le gestionnaire principal) ---
     def handle_update(self, update: Dict[str, Any]):
         try:
             if not self.card_predictor: return
@@ -370,7 +381,7 @@ class TelegramHandlers:
 
                 if not self._check_rate_limit(user_id): return
                 
-                # Commandes (AJOUT DE /mise)
+                # Commandes 
                 if text.startswith('/mise'):
                     self._handle_command_mise(chat_id, text)
                 elif text.startswith('/inter'):
@@ -456,3 +467,5 @@ class TelegramHandlers:
 
         except Exception as e:
             logger.error(f"Update error: {e}")
+
+N'hésitez pas si vous avez d'autres questions sur le déploiement ou la configuration de votre bot !
