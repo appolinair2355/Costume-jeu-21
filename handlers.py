@@ -1,4 +1,4 @@
-# handlers (4).py / handlers.py - Correction de l'erreur d'argument manquant
+# handlers.py - Version Finale (Commandes Complètes et Correction d'Arguments)
 
 import logging
 import time
@@ -7,18 +7,22 @@ from collections import defaultdict
 from typing import Dict, Any, Optional
 import requests
 import os 
+import sys
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # Importation Robuste
 try:
-    # IMPORTANT: Assurez-vous que l'autre fichier est nommé card_predictor.py
-    from card_predictor import CardPredictor, STATIC_RULES 
+    from card_predictor import CardPredictor, STATIC_RULES
 except ImportError:
-    logger.error("❌ IMPOSSIBLE D'IMPORTER CARDPREDICTOR. Vérifiez le nom du fichier.")
-    CardPredictor = None
-    STATIC_RULES = {}
+    # Tenter un import alternatif ou vérifier si le fichier existe
+    try:
+        from card_predictor_final import CardPredictor, STATIC_RULES
+    except ImportError:
+        logger.error("❌ IMPOSSIBLE D'IMPORTER CARDPREDICTOR. Vérifiez le nom du fichier.")
+        CardPredictor = None
+        STATIC_RULES = {}
 
 user_message_counts = defaultdict(list)
 
@@ -47,16 +51,21 @@ Je prédis la prochaine Enseigne (Couleur) en utilisant :
 • `/inter status` - Voir les règles apprises (Top 2)
 • `/inter activate` - **Activer manuellement** le mode intelligent
 • `/inter default` - Désactiver et revenir aux règles statiques
-• `/collect` - Voir les données collectées
+• `/collect` - Voir les données collectées (N-2 -> N)
 """
 
 class TelegramHandlers:
 
-    # ------------------ LIGNE CORRIGÉE ------------------
-    def __init__(self, bot_token: str, server_url: str = ""): # server_url est maintenant optionnel
+    # ------------------ CORRECTION D'ARGUMENT MANQUANT ------------------
+    def __init__(self, bot_token: str, server_url: str = ""):
         self.bot_token = bot_token
         self.server_url = server_url
         self.api_url = f"https://api.telegram.org/bot{bot_token}"
+        
+        if CardPredictor is None:
+             logger.critical("Bot ne peut pas démarrer car CardPredictor n'a pas été importé.")
+             sys.exit(1) # Arrêter le processus si l'importation est critique
+             
         self.card_predictor = CardPredictor(self.send_message)
         logger.info("Handlers initialized.")
         
@@ -92,7 +101,7 @@ class TelegramHandlers:
         command = text.split()[0].lower()
         args = text.split()[1:]
         
-        # --- NOUVELLES COMMANDES RAPIDES /r et /a ---
+        # --- COMMANDES RAPIDES /r et /a ---
         if command in ('/r', '/reset_stock'):
             # Reset manuel des stocks de prédiction (uniquement)
             self.card_predictor.predictions = {}
@@ -116,11 +125,78 @@ class TelegramHandlers:
             self.send_message(chat_id, f"{emoji} Mode Intelligent (INTER) **{mode}**.")
             return
 
-        # --- COMMANDES EXISTANTES ---
+        # --- COMMANDES DE BASE ---
         if command == '/start':
             self.send_message(chat_id, WELCOME_MESSAGE)
         
-        # Logique pour les autres commandes (non montrée ici mais inchangée)
+        elif command == '/stat':
+            p = self.card_predictor
+            time_since_pred = (time.time() - p.last_prediction_time) / 60 if p.last_prediction_time else 0
+            time_since_analysis = (time.time() - p.last_analysis_time) / 60 if p.last_analysis_time else 0
+
+            status_msg = f"""
+⚙️ **ÉTAT DU SYSTÈME** ━━━━━━━━━━━━━━━━━━━━━
+🧠 **Mode IA (INTER)** : {'**Activé** ✅' if p.is_inter_mode_active else 'Désactivé 📜'}
+    • Dernière analyse : {time_since_analysis:.1f} min
+    • Règles INTER : {len(p.smart_rules)} ensembles de Top 2
+
+📈 **Stock de Prédiction**
+    • Dernier jeu prédit : **{p.last_predicted_game_number}**
+    • Dernier jeu Source traité : **{p.extract_game_number(list(p.processed_messages)[-1]) if p.processed_messages else 'N/A'}**
+    • Temps écoulé : {time_since_pred:.1f} min (depuis dernier N+2)
+    • Fails Statiques consécutifs : **{p.consecutive_fails}** / 2
+
+🔗 **Configuration des Canaux**
+    • Source ID : `{p.target_channel_id}`
+    • Prédiction ID : `{p.prediction_channel_id}`
+    • Admin ID : `{p.active_admin_chat_id or 'Non défini'}`
+"""
+            self.send_message(chat_id, status_msg)
+            
+        elif command == '/config':
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "Définir comme Canal SOURCE 📥", "callback_data": "set_source"}],
+                    [{"text": "Définir comme Canal PRÉDICTION 📤", "callback_data": "set_prediction"}],
+                    [{"text": "Définir comme Chat ADMIN 🚨", "callback_data": "set_admin"}]
+                ]
+            }
+            self.send_message(chat_id, "Cliquez pour assigner le rôle de ce chat/canal au bot :", keyboard=keyboard)
+
+        elif command == '/inter':
+            if not args or args[0].lower() == 'status':
+                status_data = self.card_predictor.get_inter_status()
+                keyboard = {
+                    "inline_keyboard": [
+                        [{"text": "Relancer Analyse (Top 2)", "callback_data": "inter_reanalyze"}]
+                    ]
+                }
+                self.send_message(chat_id, status_data, keyboard=keyboard)
+                
+            elif args[0].lower() == 'activate':
+                self.card_predictor.is_inter_mode_active = True
+                self.card_predictor._save_data(True, 'is_inter_mode_active.json')
+                self.card_predictor.analyze_and_set_smart_rules(chat_id=chat_id, force_activate=True)
+                self.send_message(chat_id, "🧠 Mode Intelligent **ACTIVÉ**.")
+            
+            elif args[0].lower() == 'default':
+                self.card_predictor.is_inter_mode_active = False
+                self.card_predictor._save_data(False, 'is_inter_mode_active.json')
+                self.send_message(chat_id, "📜 Mode Intelligent **DÉSACTIVÉ** (Retour aux règles statiques).")
+            
+            else:
+                 self.send_message(chat_id, "❌ Commande `inter` inconnue.")
+
+        elif command == '/collect':
+            inter_data_str = json.dumps(self.card_predictor.inter_data, indent=2, ensure_ascii=False)
+            
+            if len(inter_data_str) > 3500:
+                 inter_data_str = inter_data_str[:3500] + "\n[... TRONQUÉ POUR LA LIMITE TELEGRAM ...]"
+                 
+            self.send_message(chat_id, f"📝 **DONNÉES COLLECTÉES (N-2 → N)**\n\n```json\n{inter_data_str}\n```", parse_mode='Markdown')
+        
+        else:
+             pass 
 
     def _handle_callback_query(self, callback_query: Dict[str, Any]):
         """Gère les actions des boutons inline (callbacks)."""
@@ -130,13 +206,13 @@ class TelegramHandlers:
         
         if data == 'set_source':
             self.card_predictor.set_channel_id(chat_id, 'source')
-            self.send_message(chat_id, "✅ **CANAL SOURCE** : Défini.", message_id=message_id, edit=True)
+            self.send_message(chat_id, "✅ **CANAL SOURCE** : Ce canal est maintenant désigné pour recevoir les messages de jeu à analyser.", message_id=message_id, edit=True)
         elif data == 'set_prediction':
             self.card_predictor.set_channel_id(chat_id, 'prediction')
-            self.send_message(chat_id, "✅ **CANAL PRÉDICTION** : Défini.", message_id=message_id, edit=True)
+            self.send_message(chat_id, "✅ **CANAL PRÉDICTION** : Ce canal est maintenant désigné pour l'envoi des pronostics du bot.", message_id=message_id, edit=True)
         elif data == 'set_admin':
             self.card_predictor.set_channel_id(chat_id, 'admin')
-            self.send_message(chat_id, "✅ **CHAT ADMIN** : Défini.", message_id=message_id, edit=True)
+            self.send_message(chat_id, "✅ **CHAT ADMIN** : Ce chat recevra les alertes critiques (ex: reset quotidien).", message_id=message_id, edit=True)
         elif data == 'inter_reanalyze':
             self.card_predictor.analyze_and_set_smart_rules(chat_id=chat_id, force_activate=True)
             self.send_message(chat_id, "🧠 **Analyse relancée** : Règles INTER (Top 2) mises à jour.", message_id=message_id, edit=True)
@@ -145,7 +221,7 @@ class TelegramHandlers:
         try:
             if not self.card_predictor: return
 
-            # AJOUT CRITIQUE : Vérification du reset quotidien (00h59 WAT)
+            # Vérification du reset quotidien
             self.card_predictor.check_and_reset_predictions()
 
             # 1. Traitement des messages dans le canal SOURCE
@@ -157,10 +233,8 @@ class TelegramHandlers:
                 
                 if game_num and game_num not in self.card_predictor.processed_messages:
                     
-                    # A. COLLECTE IA (N-2 -> N)
                     self.card_predictor.collect_inter_data(game_num, text)
 
-                    # B. PRÉDICTION (N -> N+2)
                     prediction_data = self.card_predictor.should_predict(text)
                     if prediction_data:
                         predicted_suit, is_inter = prediction_data
@@ -172,7 +246,6 @@ class TelegramHandlers:
                                 self.card_predictor.predictions[res['predicted_game']]['message_id'] = sent_msg['message_id']
                                 self.card_predictor._save_all_data() 
                     
-                    # C. VÉRIFICATION (N-2)
                     res = self.card_predictor.verify_prediction(text)
                     if res and res['type'] == 'edit_message':
                         mid_to_edit = res.get('message_id_to_edit')
@@ -191,12 +264,9 @@ class TelegramHandlers:
                 game_num = self.card_predictor.extract_game_number(text)
                 
                 if game_num:
-                    
-                    # Collecte N-2 -> N sur message édité (si pas déjà fait)
                     if game_num not in self.card_predictor.collected_games:
                        self.card_predictor.collect_inter_data(game_num, text)
                     
-                    # Vérifier UNIQUEMENT sur messages finalisés (✅ ou 🔰)
                     if self.card_predictor.has_completion_indicators(text) or '🔰' in text:
                         res = self.card_predictor.verify_prediction_from_edit(text)
                         
